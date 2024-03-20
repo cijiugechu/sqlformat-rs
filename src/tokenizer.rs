@@ -1,14 +1,15 @@
-use nom::branch::alt;
-use nom::bytes::complete::{tag, tag_no_case, take, take_until, take_while1};
-use nom::character::complete::{anychar, char, digit0, digit1, not_line_ending};
-use nom::combinator::{eof, opt, peek, recognize, verify};
-use nom::error::ParseError;
-use nom::error::{Error, ErrorKind};
-use nom::multi::many0;
-use nom::sequence::{terminated, tuple};
-use nom::{AsChar, Err, IResult};
 use std::borrow::Cow;
 use unicode_categories::UnicodeCategories;
+use winnow::branch::alt;
+use winnow::bytes::{any, one_of, tag, tag_no_case, take, take_until0, take_while1};
+use winnow::character::{digit0, digit1, not_line_ending};
+use winnow::combinator::{eof, opt, peek};
+use winnow::error::ParseError;
+use winnow::error::{ErrMode, Error, ErrorKind};
+use winnow::multi::many0;
+use winnow::sequence::terminated;
+use winnow::Parser;
+use winnow::{stream::AsChar, IResult};
 
 pub(crate) fn tokenize(mut input: &str, named_placeholders: bool) -> Vec<Token<'_>> {
     let mut tokens: Vec<Token> = Vec::new();
@@ -118,24 +119,30 @@ fn get_comment_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn get_line_comment_token(input: &str) -> IResult<&str, Token<'_>> {
-    recognize(tuple((alt((tag("#"), tag("--"))), not_line_ending)))(input).map(|(input, token)| {
-        (
-            input,
-            Token {
-                kind: TokenKind::LineComment,
-                value: token,
-                key: None,
-            },
-        )
-    })
+    Parser::recognize((alt((tag("#"), tag("--"))), not_line_ending))
+        .parse_next(input)
+        .map(|(input, token)| {
+            (
+                input,
+                Token {
+                    kind: TokenKind::LineComment,
+                    value: token,
+                    key: None,
+                },
+            )
+        })
 }
 
 fn get_block_comment_token(input: &str) -> IResult<&str, Token<'_>> {
-    recognize(tuple((
+    Parser::recognize((
         tag("/*"),
-        alt((take_until("*/"), recognize(many0(anychar)))),
+        alt((
+            take_until0("*/"),
+            Parser::<_, String, _>::recognize(many0(any)),
+        )),
         opt(take(2usize)),
-    )))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -187,31 +194,23 @@ pub fn take_till_escaping<'a, Error: ParseError<&'a str>>(
 // 5. national character quoted string using N'' or N\' to escape
 fn get_string_token(input: &str) -> IResult<&str, Token<'_>> {
     alt((
-        recognize(tuple((
-            char('`'),
-            take_till_escaping('`', &['`']),
-            take(1usize),
-        ))),
-        recognize(tuple((
-            char('['),
-            take_till_escaping(']', &[']']),
-            take(1usize),
-        ))),
-        recognize(tuple((
-            char('"'),
+        Parser::recognize((one_of('`'), take_till_escaping('`', &['`']), take(1usize))),
+        Parser::recognize((one_of('['), take_till_escaping(']', &[']']), take(1usize))),
+        Parser::recognize((
+            one_of('"'),
             take_till_escaping('"', &['"', '\\']),
             take(1usize),
-        ))),
-        recognize(tuple((
-            char('\''),
+        )),
+        Parser::recognize((
+            one_of('\''),
             take_till_escaping('\'', &['\'', '\\']),
             take(1usize),
-        ))),
-        recognize(tuple((
+        )),
+        Parser::recognize((
             tag("N'"),
             take_till_escaping('\'', &['\'', '\\']),
             take(1usize),
-        ))),
+        )),
     ))(input)
     .map(|(input, token)| {
         (
@@ -228,31 +227,15 @@ fn get_string_token(input: &str) -> IResult<&str, Token<'_>> {
 // Like above but it doesn't replace double quotes
 fn get_placeholder_string_token(input: &str) -> IResult<&str, Token<'_>> {
     alt((
-        recognize(tuple((
-            char('`'),
-            take_till_escaping('`', &['`']),
-            take(1usize),
-        ))),
-        recognize(tuple((
-            char('['),
-            take_till_escaping(']', &[']']),
-            take(1usize),
-        ))),
-        recognize(tuple((
-            char('"'),
-            take_till_escaping('"', &['\\']),
-            take(1usize),
-        ))),
-        recognize(tuple((
-            char('\''),
+        Parser::recognize((one_of('`'), take_till_escaping('`', &['`']), take(1usize))),
+        Parser::recognize((one_of('['), take_till_escaping(']', &[']']), take(1usize))),
+        Parser::recognize((one_of('"'), take_till_escaping('"', &['\\']), take(1usize))),
+        Parser::recognize((
+            one_of('\''),
             take_till_escaping('\'', &['\\']),
             take(1usize),
-        ))),
-        recognize(tuple((
-            tag("N'"),
-            take_till_escaping('\'', &['\\']),
-            take(1usize),
-        ))),
+        )),
+        Parser::recognize((tag("N'"), take_till_escaping('\'', &['\\']), take(1usize))),
     ))(input)
     .map(|(input, token)| {
         (
@@ -313,8 +296,8 @@ fn get_placeholder_token(input: &str, named_placeholders: bool) -> IResult<&str,
 
 fn get_indexed_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
     alt((
-        recognize(tuple((alt((char('?'), char('$'))), digit1))),
-        recognize(char('?')),
+        Parser::recognize((alt((one_of('?'), one_of('$'))), digit1)),
+        Parser::recognize(one_of('?')),
     ))(input)
     .map(|(input, token)| {
         (
@@ -341,12 +324,13 @@ fn get_indexed_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn get_ident_named_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
-    recognize(tuple((
-        alt((char('@'), char(':'), char('$'))),
+    Parser::recognize((
+        alt((one_of('@'), one_of(':'), one_of('$'))),
         take_while1(|item: char| {
             item.is_alphanumeric() || item == '.' || item == '_' || item == '$'
         }),
-    )))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         let index = Cow::Borrowed(&token[1..]);
         (
@@ -361,10 +345,11 @@ fn get_ident_named_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn get_string_named_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
-    recognize(tuple((
-        alt((char('@'), char(':'))),
+    Parser::recognize((
+        alt((one_of('@'), one_of(':'))),
         get_placeholder_string_token,
-    )))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         let index =
             get_escaped_placeholder_key(&token[2..token.len() - 1], &token[token.len() - 1..]);
@@ -384,10 +369,11 @@ fn get_escaped_placeholder_key<'a>(key: &'a str, quote_char: &str) -> Cow<'a, st
 }
 
 fn get_number_token(input: &str) -> IResult<&str, Token<'_>> {
-    recognize(tuple((
+    Parser::recognize((
         opt(tag("-")),
         alt((scientific_notation, decimal_number, digit1)),
-    )))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -401,16 +387,17 @@ fn get_number_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn decimal_number(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((digit1, tag("."), digit0)))(input)
+    Parser::recognize((digit1, tag("."), digit0)).parse_next(input)
 }
 
 fn scientific_notation(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((
+    Parser::recognize((
         alt((decimal_number, digit1)),
         tag("e"),
         alt((tag("-"), tag("+"), tag(""))),
         digit1,
-    )))(input)
+    ))
+    .parse_next(input)
 }
 
 fn get_reserved_word_token<'a>(
@@ -422,7 +409,7 @@ fn get_reserved_word_token<'a>(
     // this makes it so in "my_table.from", "from" is not considered a reserved word
     if let Some(token) = previous_token {
         if token.value == "." {
-            return Err(Err::Error(Error::new(input, ErrorKind::IsNot)));
+            return Err(ErrMode::Backtrack(Error::new(input, ErrorKind::IsNot)));
         }
     }
 
@@ -486,7 +473,7 @@ fn get_top_level_reserved_token(input: &str) -> IResult<&str, Token<'_>> {
             },
         ))
     } else {
-        Err(Err::Error(Error::new(input, ErrorKind::Alt)))
+        Err(ErrMode::Backtrack(Error::new(input, ErrorKind::Alt)))
     }
 }
 
@@ -535,7 +522,7 @@ fn get_newline_reserved_token<'a>(
                 },
             ))
         } else {
-            Err(Err::Error(Error::new(input, ErrorKind::Alt)))
+            Err(ErrMode::Backtrack(Error::new(input, ErrorKind::Alt)))
         }
     }
 }
@@ -565,7 +552,7 @@ fn get_top_level_reserved_token_no_indent(input: &str) -> IResult<&str, Token<'_
             },
         ))
     } else {
-        Err(Err::Error(Error::new(input, ErrorKind::Alt)))
+        Err(ErrMode::Backtrack(Error::new(input, ErrorKind::Alt)))
     }
 }
 
@@ -924,7 +911,7 @@ fn get_plain_reserved_token(input: &str) -> IResult<&str, Token<'_>> {
             },
         ))
     } else {
-        Err(Err::Error(Error::new(input, ErrorKind::Alt)))
+        Err(ErrMode::Backtrack(Error::new(input, ErrorKind::Alt)))
     }
 }
 
@@ -962,7 +949,7 @@ fn get_operator_token(input: &str) -> IResult<&str, Token<'_>> {
         tag("!~*"),
         tag("!~"),
         tag(":="),
-        recognize(verify(take(1usize), |token: &str| {
+        Parser::recognize(Parser::verify(take(1usize), |token: &str| {
             token != "\n" && token != "\r"
         })),
     ))(input)
@@ -981,7 +968,7 @@ fn get_operator_token(input: &str) -> IResult<&str, Token<'_>> {
 fn end_of_word(input: &str) -> IResult<&str, &str> {
     peek(alt((
         eof,
-        verify(take(1usize), |val: &str| {
+        Parser::verify(take(1usize), |val: &str| {
             !is_word_character(val.chars().next().unwrap())
         }),
     )))(input)

@@ -13,7 +13,7 @@ keywords = ["sql"]
 categories = ["development-tools"]
 
 [dependencies]
-nom = "7.0.0"
+winnow = "0.3.0"
 unicode_categories = "0.1.1"
 
 [dev-dependencies]
