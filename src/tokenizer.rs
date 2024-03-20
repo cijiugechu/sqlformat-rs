@@ -1,12 +1,11 @@
 use std::borrow::Cow;
 use unicode_categories::UnicodeCategories;
+use winnow::ascii::{digit0, digit1, not_line_ending};
 use winnow::branch::alt;
-use winnow::bytes::{any, one_of, tag, tag_no_case, take, take_until0, take_while1};
-use winnow::character::{digit0, digit1, not_line_ending};
-use winnow::combinator::{eof, opt, peek};
+use winnow::bytes::{any, one_of, tag, tag_no_case, take, take_until0, take_while};
+use winnow::combinator::{eof, opt, peek, repeat};
 use winnow::error::ParseError;
 use winnow::error::{ErrMode, Error, ErrorKind};
-use winnow::multi::many0;
 use winnow::sequence::terminated;
 use winnow::Parser;
 use winnow::{stream::AsChar, IResult};
@@ -102,16 +101,18 @@ fn get_next_token<'a>(
 }
 
 fn get_whitespace_token(input: &str) -> IResult<&str, Token<'_>> {
-    take_while1(char::is_whitespace)(input).map(|(input, token)| {
-        (
-            input,
-            Token {
-                kind: TokenKind::Whitespace,
-                value: token,
-                key: None,
-            },
-        )
-    })
+    take_while(1.., char::is_whitespace)
+        .parse_next(input)
+        .map(|(input, token)| {
+            (
+                input,
+                Token {
+                    kind: TokenKind::Whitespace,
+                    value: token,
+                    key: None,
+                },
+            )
+        })
 }
 
 fn get_comment_token(input: &str) -> IResult<&str, Token<'_>> {
@@ -138,7 +139,7 @@ fn get_block_comment_token(input: &str) -> IResult<&str, Token<'_>> {
         tag("/*"),
         alt((
             take_until0("*/"),
-            Parser::<_, String, _>::recognize(many0(any)),
+            Parser::<_, String, _>::recognize(repeat(0.., any)),
         )),
         opt(take(2usize)),
     ))
@@ -211,7 +212,8 @@ fn get_string_token(input: &str) -> IResult<&str, Token<'_>> {
             take_till_escaping('\'', &['\'', '\\']),
             take(1usize),
         )),
-    ))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -236,7 +238,8 @@ fn get_placeholder_string_token(input: &str) -> IResult<&str, Token<'_>> {
             take(1usize),
         )),
         Parser::recognize((tag("N'"), take_till_escaping('\'', &['\\']), take(1usize))),
-    ))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -250,29 +253,33 @@ fn get_placeholder_string_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn get_open_paren_token(input: &str) -> IResult<&str, Token<'_>> {
-    alt((tag("("), terminated(tag_no_case("CASE"), end_of_word)))(input).map(|(input, token)| {
-        (
-            input,
-            Token {
-                kind: TokenKind::OpenParen,
-                value: token,
-                key: None,
-            },
-        )
-    })
+    alt((tag("("), terminated(tag_no_case("CASE"), end_of_word)))
+        .parse_next(input)
+        .map(|(input, token)| {
+            (
+                input,
+                Token {
+                    kind: TokenKind::OpenParen,
+                    value: token,
+                    key: None,
+                },
+            )
+        })
 }
 
 fn get_close_paren_token(input: &str) -> IResult<&str, Token<'_>> {
-    alt((tag(")"), terminated(tag_no_case("END"), end_of_word)))(input).map(|(input, token)| {
-        (
-            input,
-            Token {
-                kind: TokenKind::CloseParen,
-                value: token,
-                key: None,
-            },
-        )
-    })
+    alt((tag(")"), terminated(tag_no_case("END"), end_of_word)))
+        .parse_next(input)
+        .map(|(input, token)| {
+            (
+                input,
+                Token {
+                    kind: TokenKind::CloseParen,
+                    value: token,
+                    key: None,
+                },
+            )
+        })
 }
 
 fn get_placeholder_token(input: &str, named_placeholders: bool) -> IResult<&str, Token<'_>> {
@@ -284,13 +291,15 @@ fn get_placeholder_token(input: &str, named_placeholders: bool) -> IResult<&str,
             get_ident_named_placeholder_token,
             get_string_named_placeholder_token,
             get_indexed_placeholder_token,
-        ))(input)
+        ))
+        .parse_next(input)
     } else {
         alt((
             get_indexed_placeholder_token,
             get_ident_named_placeholder_token,
             get_string_named_placeholder_token,
-        ))(input)
+        ))
+        .parse_next(input)
     }
 }
 
@@ -298,7 +307,8 @@ fn get_indexed_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
     alt((
         Parser::recognize((alt((one_of('?'), one_of('$'))), digit1)),
         Parser::recognize(one_of('?')),
-    ))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -326,7 +336,7 @@ fn get_indexed_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
 fn get_ident_named_placeholder_token(input: &str) -> IResult<&str, Token<'_>> {
     Parser::recognize((
         alt((one_of('@'), one_of(':'), one_of('$'))),
-        take_while1(|item: char| {
+        take_while(1.., |item: char| {
             item.is_alphanumeric() || item == '.' || item == '_' || item == '$'
         }),
     ))
@@ -409,7 +419,7 @@ fn get_reserved_word_token<'a>(
     // this makes it so in "my_table.from", "from" is not considered a reserved word
     if let Some(token) = previous_token {
         if token.value == "." {
-            return Err(ErrMode::Backtrack(Error::new(input, ErrorKind::IsNot)));
+            return Err(ErrMode::Backtrack(Error::new(input, ErrorKind::Not)));
         }
     }
 
@@ -418,7 +428,8 @@ fn get_reserved_word_token<'a>(
         get_newline_reserved_token(last_reserved_token),
         get_top_level_reserved_token_no_indent,
         get_plain_reserved_token,
-    ))(input)
+    ))
+    .parse_next(input)
 }
 
 // We have to be a bit creative here for performance reasons
@@ -459,7 +470,8 @@ fn get_top_level_reserved_token(input: &str) -> IResult<&str, Token<'_>> {
             terminated(tag("VALUES"), end_of_word),
             terminated(tag("WHERE"), end_of_word),
         )),
-    ))(&uc_input);
+    ))
+    .parse_next(&uc_input);
     if let Ok((_, token)) = result {
         let final_word = token.split(' ').last().unwrap();
         let input_end_pos = input.to_ascii_uppercase().find(final_word).unwrap() + final_word.len();
@@ -498,7 +510,8 @@ fn get_newline_reserved_token<'a>(
             terminated(tag("RIGHT OUTER JOIN"), end_of_word),
             terminated(tag("WHEN"), end_of_word),
             terminated(tag("XOR"), end_of_word),
-        ))(&uc_input);
+        ))
+        .parse_next(&uc_input);
         if let Ok((_, token)) = result {
             let final_word = token.split(' ').last().unwrap();
             let input_end_pos =
@@ -538,7 +551,8 @@ fn get_top_level_reserved_token_no_indent(input: &str) -> IResult<&str, Token<'_
         terminated(tag("UNION"), end_of_word),
         terminated(tag("UNION ALL"), end_of_word),
         terminated(tag("$$"), end_of_word),
-    ))(&uc_input);
+    ))
+    .parse_next(&uc_input);
     if let Ok((_, token)) = result {
         let final_word = token.split(' ').last().unwrap();
         let input_end_pos = input.to_ascii_uppercase().find(final_word).unwrap() + final_word.len();
@@ -898,7 +912,8 @@ fn get_plain_reserved_token(input: &str) -> IResult<&str, Token<'_>> {
                 )),
             )),
         )),
-    ))(&uc_input);
+    ))
+    .parse_next(&uc_input);
     if let Ok((_, token)) = result {
         let input_end_pos = token.len();
         let (token, input) = input.split_at(input_end_pos);
@@ -916,16 +931,18 @@ fn get_plain_reserved_token(input: &str) -> IResult<&str, Token<'_>> {
 }
 
 fn get_word_token(input: &str) -> IResult<&str, Token<'_>> {
-    take_while1(is_word_character)(input).map(|(input, token)| {
-        (
-            input,
-            Token {
-                kind: TokenKind::Word,
-                value: token,
-                key: None,
-            },
-        )
-    })
+    take_while(1.., is_word_character)
+        .parse_next(input)
+        .map(|(input, token)| {
+            (
+                input,
+                Token {
+                    kind: TokenKind::Word,
+                    value: token,
+                    key: None,
+                },
+            )
+        })
 }
 
 fn get_operator_token(input: &str) -> IResult<&str, Token<'_>> {
@@ -952,7 +969,8 @@ fn get_operator_token(input: &str) -> IResult<&str, Token<'_>> {
         Parser::recognize(Parser::verify(take(1usize), |token: &str| {
             token != "\n" && token != "\r"
         })),
-    ))(input)
+    ))
+    .parse_next(input)
     .map(|(input, token)| {
         (
             input,
@@ -971,7 +989,8 @@ fn end_of_word(input: &str) -> IResult<&str, &str> {
         Parser::verify(take(1usize), |val: &str| {
             !is_word_character(val.chars().next().unwrap())
         }),
-    )))(input)
+    )))
+    .parse_next(input)
 }
 
 fn is_word_character(item: char) -> bool {
