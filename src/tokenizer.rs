@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 use unicode_categories::UnicodeCategories;
-use winnow::ascii::{digit0, digit1, not_line_ending};
+use winnow::ascii::{digit0, digit1, till_line_ending, Caseless};
 use winnow::combinator::{alt, eof, opt, peek, repeat, terminated};
 use winnow::error::{ErrMode, ErrorKind, InputError, ParserError};
-use winnow::token::{any, literal, one_of, tag_no_case, take, take_until, take_while};
-use winnow::Parser;
-use winnow::{stream::AsChar, PResult};
+use winnow::token::{any, literal, one_of, take, take_until, take_while};
+use winnow::{stream::AsChar, PResult, Parser};
 
 pub(crate) fn tokenize(mut input: &str, named_placeholders: bool) -> Vec<Token<'_>> {
     let mut tokens: Vec<Token> = Vec::new();
@@ -23,6 +22,7 @@ pub(crate) fn tokenize(mut input: &str, named_placeholders: bool) -> Vec<Token<'
             last_reserved_token = Some(result.clone());
         }
         // input = result.0;
+        println!("current input is:{input}");
 
         tokens.push(result);
     }
@@ -112,7 +112,7 @@ fn get_comment_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
 }
 
 fn get_line_comment_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
-    Parser::recognize((alt((literal("#"), literal("--"))), not_line_ending))
+    Parser::recognize((alt((literal("#"), literal("--"))), till_line_ending))
         .map(|token| Token {
             kind: TokenKind::LineComment,
             value: token,
@@ -195,11 +195,14 @@ fn get_string_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
             take(1usize),
         )),
     ))
-    .map(|token| Token {
+    .map(|token| {
+        println!("get string token: {token}");
+
+        dbg!(Token {
         kind: TokenKind::String,
         value: token,
         key: None,
-    })
+})})
     .parse_next(input)
 }
 
@@ -229,23 +232,29 @@ fn get_placeholder_string_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
 }
 
 fn get_open_paren_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
-    alt((literal("("), terminated(tag_no_case("CASE"), end_of_word)))
-        .map(|token| Token {
-            kind: TokenKind::OpenParen,
-            value: token,
-            key: None,
-        })
-        .parse_next(input)
+    alt((
+        literal("("),
+        terminated(literal(Caseless("CASE")), end_of_word),
+    ))
+    .map(|token| Token {
+        kind: TokenKind::OpenParen,
+        value: token,
+        key: None,
+    })
+    .parse_next(input)
 }
 
 fn get_close_paren_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
-    alt((literal(")"), terminated(tag_no_case("END"), end_of_word)))
-        .map(|token| Token {
-            kind: TokenKind::CloseParen,
-            value: token,
-            key: None,
-        })
-        .parse_next(input)
+    alt((
+        literal(")"),
+        terminated(literal(Caseless("END")), end_of_word),
+    ))
+    .map(|token| Token {
+        kind: TokenKind::CloseParen,
+        value: token,
+        key: None,
+    })
+    .parse_next(input)
 }
 
 fn get_placeholder_token<'s>(input: &mut &'s str, named_placeholders: bool) -> PResult<Token<'s>> {
