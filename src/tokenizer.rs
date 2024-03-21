@@ -26,7 +26,7 @@ pub(crate) fn tokenize(mut input: &str, named_placeholders: bool) -> Vec<Token<'
 
         tokens.push(result);
     }
-    tokens
+    dbg!(tokens)
 }
 
 #[derive(Debug, Clone)]
@@ -158,10 +158,12 @@ pub fn take_till_escaping<'a, Error: ParserError<&'a str>>(
 
                     if item.1 == desired {
                         let byte_pos = input.chars().take(item.0).map(|c| c.len()).sum::<usize>();
-                        return Ok(&input[..byte_pos]);
+                        *input = &input[byte_pos..];
+                        return Ok(&input);
                     }
                 }
                 None => {
+                    *input = "";
                     return Ok(input);
                 }
             }
@@ -177,18 +179,10 @@ pub fn take_till_escaping<'a, Error: ParserError<&'a str>>(
 // 5. national character quoted string using N'' or N\' to escape
 fn get_string_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
     alt((
-        Parser::recognize((one_of('`'), take_till_escaping('`', &['`']), take(1usize))),
-        Parser::recognize((one_of('['), take_till_escaping(']', &[']']), take(1usize))),
-        Parser::recognize((
-            one_of('"'),
-            take_till_escaping('"', &['"', '\\']),
-            take(1usize),
-        )),
-        Parser::recognize((
-            one_of('\''),
-            take_till_escaping('\'', &['\'', '\\']),
-            take(1usize),
-        )),
+        Parser::recognize(('`', take_till_escaping('`', &['`']), take(1usize))),
+        Parser::recognize(('[', take_till_escaping(']', &[']']), take(1usize))),
+        Parser::recognize(('"', take_till_escaping('"', &['"', '\\']), take(1usize))),
+        Parser::recognize(('\'', take_till_escaping('\'', &['\'', '\\']), take(1usize))),
         Parser::recognize((
             literal("N'"),
             take_till_escaping('\'', &['\'', '\\']),
@@ -199,10 +193,11 @@ fn get_string_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
         println!("get string token: {token}");
 
         dbg!(Token {
-        kind: TokenKind::String,
-        value: token,
-        key: None,
-})})
+            kind: TokenKind::String,
+            value: token,
+            key: None,
+        })
+    })
     .parse_next(input)
 }
 
