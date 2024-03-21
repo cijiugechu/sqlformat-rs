@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use unicode_categories::UnicodeCategories;
 use winnow::ascii::{digit0, digit1, till_line_ending, Caseless};
 use winnow::combinator::{alt, eof, opt, peek, repeat, terminated};
-use winnow::error::{ErrMode, ErrorKind, InputError, ParserError};
+use winnow::error::{ErrMode, ErrorKind, InputError, ParserError, StrContext};
 use winnow::token::{any, literal, one_of, take, take_until, take_while};
 use winnow::{stream::AsChar, PResult, Parser};
 
@@ -26,6 +26,28 @@ pub(crate) fn tokenize(mut input: &str, named_placeholders: bool) -> Vec<Token<'
 
         tokens.push(result);
     }
+    // loop {
+    //     match get_next_token(
+    //         &mut input,
+    //         tokens.last().cloned(),
+    //         last_reserved_token.clone(),
+    //         named_placeholders,
+    //     ) {
+    //         Ok(result) => {
+    //             if result.kind == TokenKind::Reserved {
+    //                 last_reserved_token = Some(result.clone());
+    //             }
+    //             // input = result.0;
+    //             println!("current input is:{input}");
+        
+    //             tokens.push(result);
+    //         }
+    //         Err(e) => {
+    //             dbg!(e);
+    //             break;
+    //         }
+    //     }
+    // }
     dbg!(tokens)
 }
 
@@ -229,7 +251,7 @@ fn get_placeholder_string_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
 fn get_open_paren_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
     alt((
         literal("("),
-        terminated(literal(Caseless("CASE")), end_of_word),
+        terminated(Caseless("CASE"), end_of_word),
     ))
     .map(|token| Token {
         kind: TokenKind::OpenParen,
@@ -242,7 +264,7 @@ fn get_open_paren_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
 fn get_close_paren_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
     alt((
         literal(")"),
-        terminated(literal(Caseless("END")), end_of_word),
+        terminated(Caseless("END"), end_of_word),
     ))
     .map(|token| Token {
         kind: TokenKind::CloseParen,
@@ -935,10 +957,6 @@ fn get_plain_reserved_token<'s>(input: &mut &'s str) -> PResult<Token<'s>, Input
         let input_end_pos = token.len();
         let (token, returned_input) = input.split_at(input_end_pos);
         *input = returned_input;
-
-        println!("input: {input}");
-        println!("returned input: {returned_input}");
-        println!("token: {token}");
         Ok(Token {
             kind: TokenKind::Reserved,
             value: token,
@@ -989,6 +1007,7 @@ fn get_operator_token<'s>(input: &mut &'s str) -> PResult<Token<'s>> {
         value: token,
         key: None,
     })
+    .context(StrContext::Label("operator"))
     .parse_next(input)
 }
 
